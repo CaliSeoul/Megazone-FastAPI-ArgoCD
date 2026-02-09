@@ -1,0 +1,59 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fastapi-app-deployment
+  labels:
+    app: fastapi-app
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: fastapi-app
+  template:
+    metadata:
+      labels:
+        app: fastapi-app
+    spec:
+      containers:
+        - name: fastapi
+          image: __IMAGE_URL__ # 플레이스홀더 사용
+          ports:
+            - containerPort: 8000 # FastAPI 기본 포트
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: fastapi-app-svc
+  labels:
+    app: fastapi-app
+spec:
+  type: NodePort # AWS ALB 'instance' 모드에서는 NodePort 필수
+  selector:
+    app: fastapi-app
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 8000 # 컨테이너 포트와 일치
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: fastapi-app-ingress
+  annotations:
+    kubernetes.io/ingress.class: alb
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: instance
+    alb.ingress.kubernetes.io/group.name: fastapi-app-ingress-group # Nginx 앱과 다른 Ingress 그룹
+  labels:
+    app: fastapi-app
+spec:
+  rules:
+    - http:
+        paths:
+          - path: / # 모든 경로를 FastAPI 앱으로 라우팅
+            pathType: Prefix
+            backend:
+              service:
+                name: fastapi-app-svc
+                port:
+                  number: 80 # Service의 Port와 일치

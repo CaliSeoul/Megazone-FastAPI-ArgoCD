@@ -1,0 +1,69 @@
+name: Build and Push FastAPI to ECR
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - 'fastapi/**' # FastAPI 폴더 내부의 변경 사항만 감지
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ap-southeast-2 # 고객님의 리전
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build & Push FastAPI Image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_REPO: seyachul9/fastapi-app # FastAPI 앱용 ECR 리포지토리
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build -t $ECR_REGISTRY/$IMAGE_REPO:$IMAGE_TAG ./fastapi
+          docker push $ECR_REGISTRY/$IMAGE_REPO:$IMAGE_TAG
+          echo "IMAGE_FULL_URI=$ECR_REGISTRY/$IMAGE_REPO:$IMAGE_TAG" >> $GITHUB_ENV
+
+      - name: Update Kubernetes Manifests (ArgoCD Trigger)
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_REPO: seyachul9/fastapi-app # FastAPI 앱용 ECR 리포지토리
+          IMAGE_TAG: ${{ github.sha }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          FULL_IMAGE="${ECR_REGISTRY}/${IMAGE_REPO}:${IMAGE_TAG}"
+          echo "DEBUG: Target Image URI is $FULL_IMAGE"
+
+          # __IMAGE_URL__ 플레이스홀더를 실제 이미지 URI로 치환
+          find manifests -name "*.y*ml" -exec sed -i "s|__IMAGE_URL__|$FULL_IMAGE|g" {} +
+          
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git add manifests/*.y*ml
+            git commit -m "chore: Auto-deploy update image tag to ${IMAGE_TAG} [skip ci]"
+            git pull --rebase origin main
+            git push origin main
+          fi
